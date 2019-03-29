@@ -1,7 +1,6 @@
 """
 MDH@29MAR2019:
-- Python program to receive data on a serial port and pass it along to a number of registered 'apps'
-
+- Python program to receive data on a serial port and pass it along to a number of 'line readers'
 """
 
 # wrapping reading serial data in a class descending from a Thread
@@ -10,9 +9,22 @@ import threading
 import serial
 import time
 
+"""
+OUTPUT: TCP SERVER AND ITS CLIENTS
+Clients should tells us who they are and what data they are interested in
+So in response to telling us who they are we return a list of active distributors to choose from
+"""
+
+"""
+END OF OUTPUT
+"""
+ 
+"""
+INPUT: SERIAL DATA DISTRIBUTOR
+"""
 class Reporter:
-	def report(self,toreport):
-		print(toreport)
+	def report(self,_report):
+		print(_report)
 
 class LineReader(list):
 	def __init__(self):
@@ -25,17 +37,20 @@ class SerialDataDistributor(threading.Thread):
 	def report(self,toreport):
 		if self.reporter is not None:
 			self.reporter.report(toreport)
-	def isActive(self):
-		return self.serialInputDevice is not None
+	def isRunnable(self):
+		# considered runnable if it is not currently running and can be run...
+		return not self.running and self.serialInputDevice is not None
 	def __init__(self,_serialInputDevice,_start=False):
 		threading.Thread.__init__(self) # can parent class constructor
 		if not isinstance(_serialInputDevice,serial.Serial):
 			raise Exception("No (proper) serial input device specified.")
 		if not _serialInputDevice.isOpen:
 			raise Exception("Serial input device '"+_serialInputDevice.name+"' is not open.")
-		self.lastChar=0
+		self.running=False
+		self.lastByte=0
 		self.line="" # the line composed so far
-		self.lineReader=None # no line reader so far
+		self.lineReaders=[] # no line reader(s) so far
+		self.lineReaderCount=0
 		self.reporter=Reporter() # by default write to console
 		self.serialInputDevice=_serialInputDevice
 		self.name=self.serialInputDevice.name # even if we kill the reference
@@ -45,6 +60,7 @@ class SerialDataDistributor(threading.Thread):
 	def __del__(self):
 		# ascertain to be closed!!
 		self.close()
+		
 	def process_bytes(self,_bytes):
 		try:
 			for _byte in _bytes:
@@ -52,8 +68,12 @@ class SerialDataDistributor(threading.Thread):
 				self.line+=chr(_byte)
 				if chr(_byte)=='\n' and self.lastByte==ord('\r'):
 					try:
-						if self.lineReader:
-							self.lineReader.read(self.line[:-2])
+						if self.lineReaderCount:
+							for lineReader in self.lineReaders:
+								try:
+									self.lineReaders.read(self.line[:-2])
+								except:
+									pass
 						elif self.reporter:
 							self.reporter.report("Read: '"+self.line[:-2]+"'.")
 					finally:
@@ -62,8 +82,10 @@ class SerialDataDistributor(threading.Thread):
 				self.lastByte=_byte
 		except Exception as ex:
 			self.report("ERROR: '"+str(ex)+"' processing "+str(len(_bytes))+" bytes received from '"+self.name+"'.")
-	
+	def isRunning(self):
+		return self.running
 	def run(self):
+		self.running=True
 		# keep reading as long as the serial input device is (still) open
 		while self.serialInputDevice:
 			if self.serialInputDevice.out_waiting:
@@ -75,9 +97,10 @@ class SerialDataDistributor(threading.Thread):
 			else:
 				self.report("Nothing to read from '"+self.name+"'...")
 			time.sleep(1)
+		self.running=False
 		self.report("'"+self.name+"' stopped running...")
 	def __str__(self):
-		return self.name+['','*'](self.isActive()) # appending * if we're up and running!!!
+		return self.name+((' FINISHED',' IDLE')[self.isRunnable()],' WORKING')[self.isRunning()] # appending - (done), + (runnable), * (running)
 	def __repr__(self):
 		return self.__str__()
 		
@@ -100,15 +123,112 @@ class SerialDataDistributor(threading.Thread):
 				self.serialInputDevice=None
 		return self
 	def setReporter(self,_reporter):
+		if _reporter is not None:
+			if not hasattr(_reporter,'report') or type(_reporter.report)!="<class 'method'>":
+				raise Exception("Reporter does not have a report() method.")
 		self.reporter=_reporter
 		return self
-	def setLineReader(self,_lineReader):
-		self.lineReader=_lineReader
-		return self
+	def deleteLineReaderWithIndex(self,_lineReaderIndex):
+		# can't actually remove
+		try:
+			if self.lineReaders[_lineReaderIndex-1] is not None:
+				self.lineReaders[_lineReaderIndex-1]=None
+				self.lineReaderCount-=1 # one registered line reader left...
+				self.report("Number of line readers associated with '"+self.name+"': "+str(self.lineReaderCount)+".")
+		except:
+			pass
+	def addLineReader(self,_lineReader):
+		if _lineReader is None or not hasattr(_lineReader,'read') or type(_lineReader.read)!="<class 'method'>":
+			raise Exception("Undefined line reader or line reader that does not have a read() method.")
+		self.lineReaders.append(_lineReader)
+		self.lineReaderCount+=1 # another line reader...
+		self.report("Number of line readers associated with '"+self.name+"': "+str(self.lineReaderCount)+".")
+		return len(self.lineReaders)
 			
 # keep a dictionary of serial data distributors (by name)
 serialDataDistributors={}
 
+# function for getting serial device parameter values
+def getBaudrate():
+	BAUDRATES=(50,75,110,134,150,200,300,600,1200,1800,2400,4800,9600,19200,38400,57600,115200,230400,460800,500000,576000,921600,1000000,1152000,1500000,2000000,2500000,3000000,3500000,4000000)
+	try:
+		print("Available baudrates: "+str(BAUDRATES)+".")
+		baudrate=int(input("What baudrate to use (default: 9600)? "))
+		if baudrate in BAUDRATES:
+			return baudrate
+	except:
+		pass
+	print("WARNING: No or invalid baudrate specified: the default will be used!")
+	return 9600
+def getBytesize():
+	BYTESIZES=(serial.FIVEBITS,serial.SIXBITS,serial.SEVENBITS,serial.EIGHTBITS)
+	try:
+		print("Available byte sizes: "+str(BYTESIZES)+".")
+		bytesize=int(input("What byte size to use (default: "+str(serial.EIGHTBITS)+")? "))
+		if bytesize in BYTESIZES:
+			return bytesize
+	except:
+		pass
+	print("WARNING: No or invalid bytesize specified: the default will be used!")
+	return serial.EIGHTBITS
+def getParity():
+	PARITIES=(serial.PARITY_NONE,serial.PARITY_EVEN,serial.PARITY_ODD,serial.PARITY_MARK,serial.PARITY_SPACE)
+	try:
+		print("Available parities: "+str(PARITIES)+".")
+		parity=int(input("What parity to use (default: "+str(serial.PARITY_NONE)+")? "))
+		if parity in PARITIES:
+			return parity
+	except:
+		pass
+	print("WARNING: No or invalid parity specified: the default will be used!")
+	return serial.PARITY_NONE
+def getStopbits():
+	STOPBITS=(serial.STOPBITS_ONE,serial.STOPBITS_ONE_POINT_FIVE,serial.STOPBITS_TWO)
+	try:
+		print("Available number of stop bits: "+str(STOPBITS)+".")
+		stopbits=int(input("What number of stop bits to use (default: "+str(serial.STOPBITS_ONE)+")? "))
+		if stopbits in STOPBITS:
+			return stopbits
+	except:
+		pass
+	print("WARNING: No or invalid stopbits specified: the default will be used!")
+	return serial.STOPBITS_ONE
+def getTimeout():
+	try:
+		timeout=float(input("What timeout (in seconds) to use (default: none)? "))
+		if timeout>0:
+			return timeout
+	except:
+		pass
+	print("WARNING: No or an invalid timeout specified: no timeout will be used.")
+	return None
+def getXonxoff():
+	return input("Use xon - xoff (default: False)? ") in ('Y','y')
+def getRtscts():
+	return input("Use rts - cts (default: False)? ") in ('Y','y')
+def getWrite_timeout():
+	try:
+		write_timeout=float(input("What write timeout (in seconds) to use (default: none)? "))
+		if write_timeout>0:
+			return write_timeout
+	except:
+		pass
+	print("WARNING: No or an invalid write timeout specified: no write timeout will be used.")
+	return None
+def getDsrdtr():
+	return input("Use dsr - dtr (default: False)? ") in ('Y','y')
+def getInter_byte_timeout():
+	try:
+		inter_byte_timeout=float(input("What inter-character timeout (in seconds) to use (default: none)? "))
+		if inter_byte_timeout>0:
+			return inter_byte_timeout
+	except:
+		pass
+	print("WARNING: No or an invalid inter-character timeout specified: no inter-character timeout will be used.")
+	return None
+def getExclusive():
+	return input("Use exclusive access mode (POSIX only) (default: False)? ") in ('Y','y')
+	
 def getDistributor(inputDeviceName=None):
 	# is there a default device?
 	if not isinstance(inputDeviceName,str):
@@ -146,9 +266,9 @@ def getDistributor(inputDeviceName=None):
 		print("No serial input device specified.")
 		return None
 	global serialDataDistributors
-	if not inputDeviceName in serialDataDistributors or not serialDataDistributors[serialDataDistributor].isRunning():
+	if not inputDeviceName in serialDataDistributors or not serialDataDistributors[inputDeviceName].isRunning():
 		try:
-			serialDataDistributors[inputDeviceName]=SerialDataDistributor(serial.Serial(port=inputDeviceName))
+			serialDataDistributors[inputDeviceName]=SerialDataDistributor(serial.Serial(port=inputDeviceName,baudrate=getBaudrate(),bytesize=getBytesize(),parity=getParity(),stopbits=getStopbits(),timeout=getTimeout(),xonxoff=getXonxoff(),rtscts=getRtscts(),write_timeout=getWrite_timeout(),dsrdtr=getDsrdtr(),inter_byte_timeout=getInter_byte_timeout(),exclusive=getExclusive()))
 		except Exception as ex:
 			print("ERROR: '"+str(ex)+"' instantiating the serial device called '"+inputDeviceName+"'.")
 	return serialDataDistributors[inputDeviceName]
