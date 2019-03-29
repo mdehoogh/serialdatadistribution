@@ -47,7 +47,7 @@ class SerialDataDistributor(threading.Thread):
 		if not _serialInputDevice.isOpen:
 			raise Exception("Serial input device '"+_serialInputDevice.name+"' is not open.")
 		self.running=False
-		self.lastByte=0
+		self.lastChar='\0'
 		self.line="" # the line composed so far
 		self.lineReaders=[] # no line reader(s) so far
 		self.lineReaderCount=0
@@ -65,13 +65,13 @@ class SerialDataDistributor(threading.Thread):
 		try:
 			for _byte in _bytes:
 				_char=chr(_byte)
-				self.line+=chr(_byte)
-				if chr(_byte)=='\n' and self.lastByte==ord('\r'):
+				self.line+=_char
+				if _char=='\n' and self.lastChar=='\r':
 					try:
 						if self.lineReaderCount:
 							for lineReader in self.lineReaders:
 								try:
-									self.lineReaders.read(self.line[:-2])
+									lineReader.read(self.line[:-2])
 								except:
 									pass
 						elif self.reporter:
@@ -79,7 +79,7 @@ class SerialDataDistributor(threading.Thread):
 					finally:
 						self.line=""
 				# remember the last byte received...
-				self.lastByte=_byte
+				self.lastChar=_char
 		except Exception as ex:
 			self.report("ERROR: '"+str(ex)+"' processing "+str(len(_bytes))+" bytes received from '"+self.name+"'.")
 	def isRunning(self):
