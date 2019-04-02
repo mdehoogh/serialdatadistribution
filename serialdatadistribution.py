@@ -16,6 +16,8 @@ import threading
 import serial
 import time
 import queue
+#import io
+import asyncio
 
 """
 OUTPUT: TCP SERVER AND ITS CLIENTS
@@ -42,12 +44,11 @@ class LineReader(list):
 		print("Line #"+str(len(self))+": '"+_read+"'.")
 		
 class SerialDataDistributor(threading.Thread):
+
 	def __report(self,toreport):
 		if self.reporter is not None:
 			self.reporter.report(toreport)
-	def isRunnable(self):
-		# considered runnable if it is not currently running and can be run...
-		return not self.running and self.serialInputDevice is not None
+
 	def __init__(self,_serialInputDevice,_report=True,_start=False):
 		threading.Thread.__init__(self) # can parent class constructor
 		if not isinstance(_serialInputDevice,serial.Serial):
@@ -55,6 +56,7 @@ class SerialDataDistributor(threading.Thread):
 		if not _serialInputDevice.isOpen:
 			raise Exception("Serial input device '"+_serialInputDevice.name+"' is not open.")
 		self.running=False
+		self.sleep=0.0 # by default do not sleep
 		self.lines=queue.Queue() # the list of received lines
 		self.lastChar='\0'
 		self.line="" # the line composed so far
@@ -69,38 +71,24 @@ class SerialDataDistributor(threading.Thread):
 		# start reading from the serial input device
 		if _start:
 			self.start()
+
 	def __del__(self):
 		# ascertain to be closed!!
 		self.close()
 	
-	# how many lines are there still?
-	def getLinesAvailable(self):
-		if self.lines.empty():
-			return 0
-		return self.lines.qsize()
-		
-	def getLine(self):
-		if not self.lines.empty():
-			try:
-				# return if a line is immediately available (i.e. don't block)
-				return self.lines.get_nowait()
-			except:
-				pass
-		return None
-		
 	def __process_line(self,_line):
 		try:
 			self.lines.put_nowait(_line) # store the line received
 		except Queue.Full:
-			self.__report("ERROR: Lines queue is full!")
-		if self.lineReaderCount:
+			self.__report("ERROR: Failed to queue a line, because the queue is full!")
+		if self.lineReaderCount: # we have line readers
 			for lineReader in self.lineReaders:
 				try:
 					lineReader.read(_line)
 				except:
 					pass
-		elif self.reporter:
-			self.reporter.report("Read: '"+_line+"'.")
+		else: # pass along to the reporter (if any)
+			self.__report("Read: '"+_line+"'.")
 	
 	def __process_bytes(self,_bytes):
 		try:
@@ -116,12 +104,11 @@ class SerialDataDistributor(threading.Thread):
 				self.lastChar=_char
 		except Exception as ex:
 			self.__report("ERROR: '"+str(ex)+"' processing "+str(len(_bytes))+" bytes received from '"+self.name+"'.")
-	def isRunning(self):
-		return self.running
+
 	def run(self):
-		self.running=True
+		self.running=self.serialInputDevice is not None
 		# keep reading as long as the serial input device is (still) open
-		while self.serialInputDevice:
+		while self.running:
 			if self.serialInputDevice.out_waiting:
 				self.serialInputDevice.flush() # write everything that can be written
 			numberOfBytesToRead=self.serialInputDevice.in_waiting
@@ -132,24 +119,16 @@ class SerialDataDistributor(threading.Thread):
 			else:
 				self.__report("Nothing to read from '"+self.name+"'...")
 			"""
-			time.sleep(1)
-		self.running=False
-		self.__report("'"+self.name+"' stopped running...")
-	def __str__(self):
-		return self.name+((' FINISHED',' IDLE')[self.isRunnable()],' WORKING')[self.isRunning()] # appending - (done), + (runnable), * (running)
-	def __repr__(self):
-		return self.__str__()
-		
-	def write(self,_bytes):
-		if isinstance(_bytes,bytes):
-			if self.serialInputDevice.isOpen:
-				return self.serialInputDevice.write(_bytes)
-		return 0
-		
-	def close(self):
+			if self.sleep>0:
+				time.sleep(self.sleep)
+		self.__report("'"+self.name+"' finished running...")
+		self.__close() # as soon as the loop ends close the serial port connection as well...
+
+	def __close(self):
 		# ascertain to close only once
 		if self.serialInputDevice:
 			try:
+				self.serialInputDevice.flushInput() # TODO should we do this?????
 				self.serialInputDevice.flushOutput() # TODO should we do this?????
 				self.serialInputDevice.close()
 				self.__report("Connection to '"+self.name+"' closed.")
@@ -157,11 +136,74 @@ class SerialDataDistributor(threading.Thread):
 				self.__report("ERROR: '"+str(ex)+"' closing the connection to '"+self.name+"'.")
 			finally: # ascertain to remove the reference
 				self.serialInputDevice=None
+		
+	def __str__(self):
+		return self.name+((' FINISHED',' IDLE')[self.isRunnable()],' WORKING')[self.isRunning()] # appending - (done), + (runnable), * (running)
+	
+	def __repr__(self):
+		return self.__str__()
+		
+	# 'PUBLIC'
+	# by making SerialDataDistributor iterable you can consume the lines saved
+	def __iter__(self):
 		return self
+
+	def __next__(self):
+		if self.lines.empty():
+			raise StopIteration("No further lines available.")
+		return self.lines.get_nowait()
+
+	# how many lines are there still?
+	def hasNext(self):
+		return (self.lines.qsize()>0,False)[self.lines.empty()]
+		
+	def next(self):
+		if not self.lines.empty():
+			try:
+				# return if a line is immediately available (i.e. don't block)
+				return self.lines.get_nowait()
+			except:
+				pass
+		return None
+		
+	# readline() waits for input asynchonously...
+	async def readline(self):
+		if self.running or self.serialInputDevice is None:
+			return None
+		await self.serialInputDevice.readline()
+
+	def isRunning(self):
+		return self.running
+
+	def isRunnable(self):
+		# considered runnable if it is not currently running and can be run...
+		return not self.running and self.serialInputDevice is not None
+
+	def write(self,_bytes):
+		if isinstance(_bytes,bytes):
+			if self.serialInputDevice is not None and self.serialInputDevice.isOpen:
+				return self.serialInputDevice.write(_bytes)
+		return 0
 		
 	# makes more sense to have a stop() instead of a close()
+	def start(self,_sleep=0.0):
+		if isinstance(_sleep,(int,float)):
+			self.sleep=_sleep
+		# can't run twice!!!
+		if self.serialInputDevice is None:
+			self.__report("Can't start '"+self.name+"' again.")
+		elif self.running:
+			self.__report("Can't start '"+self.name+"': it has already started.")
+		else:
+			threading.Thread.start(self)
+
 	def stop(self):
-		return self.close()
+		if self.serialInputDevice is None:
+			self.__report("Can't stop '"+self.name+"' again.")
+		elif not self.running:
+			self.__report("Can't stop '"+self.name+"' it has already stopped.")
+		else:
+			self.running=False
 		
 	def setReporter(self,_reporter):
 		if _reporter is not None:
@@ -190,7 +232,7 @@ class SerialDataDistributor(threading.Thread):
 # keep a dictionary of serial data distributors (by name)
 serialDataDistributors={}
 
-# function for getting serial device parameter values
+# functions for getting serial device parameter values
 def getBaudrate():
 	BAUDRATES=(50,75,110,134,150,200,300,600,1200,1800,2400,4800,9600,19200,38400,57600,115200,230400,460800,500000,576000,921600,1000000,1152000,1500000,2000000,2500000,3000000,3500000,4000000)
 	try:
@@ -316,11 +358,12 @@ def getDistributor(inputDeviceName=None,report=True,start=False):
 	return serialDataDistributors[inputDeviceName]
 
 def newDistributor():
+	print("\nNew serial data distributor creation")
 	report=input("Do you want to use a default reporter? ") in ['Y','y']
 	start=input("Do you want the distributor to start immediately? ") in ['Y','y']
 	return getDistributor(None,report,start)
 	
-if __name__=="main":
+if __name__=="__main__":
 	# try to get a distributor
 	distributor=getDistributor()
 	if distributor is not None:
