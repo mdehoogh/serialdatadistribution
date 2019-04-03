@@ -11,6 +11,7 @@ import _thread
 import serial
 import queue
 import sys
+import time
 
 # ByteReceiver is the parent class of all ByteReceiver
 class ByteReader:
@@ -19,7 +20,7 @@ class ByteReader:
 		if isinstance(_name,str):
 			self.name=_name
 		else:
-			self.name='anonymous'
+			self.name=None
 		self.serialDataDispatcher=None
 		self.numberOfReadBytes=0 # keep track of the number of bytes collected so far
 		# if in an interactive session we will queue whatever we retrieve
@@ -54,6 +55,7 @@ class ByteReader:
 	def update(self,_numberOfStoredBytes):
 		# here's a little issue in that _numberOfStoredBytes is what the serial data dispatcher has read, but this might not be the maximum that could be retrieved
 		# therefore we simply read everything (i.e. )
+		sys.stdout.write('@')
 		try:
 			bytesRead=self.read()
 			if self.readBytesQueue:
@@ -107,7 +109,7 @@ class SerialDataDispatcher:
 		self.name=self.serialInputDevice.name # even if we kill the reference
 		# if there's a default byte reader, it's a good idea to start immediately...
 		if _adddefaultbytereader:
-			if self.addByteReader(ByteReader(None,sys.flags.interactive)):
+			if self.addByteReader(ByteReader(None,True)):
 				self.start()
 			else:
 				self.__report("ERROR: Failed to add a default byte reader.")
@@ -323,86 +325,127 @@ class SerialDataDispatcher:
 serialDataDispatchers={}
 
 # functions for getting serial device parameter values
-def getBaudrate():
+def getBaudrate(_baudrate=None):
 	BAUDRATES=(50,75,110,134,150,200,300,600,1200,1800,2400,4800,9600,19200,38400,57600,115200,230400,460800,500000,576000,921600,1000000,1152000,1500000,2000000,2500000,3000000,3500000,4000000)
 	try:
-		print("Available baudrates: "+str(BAUDRATES)+".")
-		baudrate=int(input("What baudrate to use (default: 9600)? "))
+		if _baudrate is None:
+			print("Available baudrates: "+str(BAUDRATES)+".")
+			baudrate=int(input("What baudrate to use (default: 9600)? "))
+		else:
+			baudrate=int(_baudrate)
 		if baudrate in BAUDRATES:
 			return baudrate
 	except:
 		pass
 	print("WARNING: No or invalid baudrate specified: the default will be used!")
 	return 9600
-def getBytesize():
+def getBytesize(_bytesize=None):
 	BYTESIZES=(serial.FIVEBITS,serial.SIXBITS,serial.SEVENBITS,serial.EIGHTBITS)
 	try:
-		print("Available byte sizes: "+str(BYTESIZES)+".")
-		bytesize=int(input("What byte size to use (default: "+str(serial.EIGHTBITS)+")? "))
+		if _bytesize is None:
+			print("Available byte sizes: "+str(BYTESIZES)+".")
+			bytesize=int(input("What byte size to use (default: "+str(serial.EIGHTBITS)+")? "))
+		else:
+			bytesize=int(_bytesize)
 		if bytesize in BYTESIZES:
 			return bytesize
 	except:
 		pass
 	print("WARNING: No or invalid bytesize specified: the default will be used!")
 	return serial.EIGHTBITS
-def getParity():
+def getParity(_partity=None):
 	PARITIES=(serial.PARITY_NONE,serial.PARITY_EVEN,serial.PARITY_ODD,serial.PARITY_MARK,serial.PARITY_SPACE)
 	try:
-		print("Available parities: "+str(PARITIES)+".")
-		parity=int(input("What parity to use (default: "+str(serial.PARITY_NONE)+")? "))
+		if _parity is None:
+			print("Available parities: "+str(PARITIES)+".")
+			parity=int(input("What parity to use (default: "+str(serial.PARITY_NONE)+")? "))
+		else:
+			parity=int(_parity)
 		if parity in PARITIES:
 			return parity
 	except:
 		pass
 	print("WARNING: No or invalid parity specified: the default will be used!")
 	return serial.PARITY_NONE
-def getStopbits():
+def getStopbits(_stopbits=None):
 	STOPBITS=(serial.STOPBITS_ONE,serial.STOPBITS_ONE_POINT_FIVE,serial.STOPBITS_TWO)
 	try:
-		print("Available number of stop bits: "+str(STOPBITS)+".")
-		stopbits=int(input("What number of stop bits to use (default: "+str(serial.STOPBITS_ONE)+")? "))
+		if _stopbits is None:
+			print("Available number of stop bits: "+str(STOPBITS)+".")
+			stopbits=int(input("What number of stop bits to use (default: "+str(serial.STOPBITS_ONE)+")? "))
+		else:
+			stopbits=int(_stopbits)
 		if stopbits in STOPBITS:
 			return stopbits
 	except:
 		pass
 	print("WARNING: No or invalid stopbits specified: the default will be used!")
 	return serial.STOPBITS_ONE
-def getTimeout():
+def getTimeout(_timeout=None):
 	try:
-		timeout=float(input("What timeout (in seconds) to use (default: none)? "))
+		if _timeout is None:
+			timeout=float(input("What timeout (in seconds) to use (default: none)? "))
+		else:
+			timeout=float(_timeout)
 		if timeout>0:
 			return timeout
 	except:
 		pass
 	print("WARNING: No or an invalid timeout specified: no timeout will be used.")
 	return None
-def getXonxoff():
-	return input("Use xon - xoff (default: False)? ") in ('Y','y')
-def getRtscts():
-	return input("Use rts - cts (default: False)? ") in ('Y','y')
-def getWrite_timeout():
+def getXonxoff(_xonxoff=None):
+	if _xonxoff is None:
+		return input("Use xon - xoff (default: False)? ") in ('Y','y')
+	return (False,True)[_xonxoff in ('Y','y')]
+def getRtscts(_rtscts=None):
+	if _rtscts is None:
+		return input("Use rts - cts (default: False)? ") in ('Y','y')
+	return (False,True)[_rtscts in ('Y','y')]
+def getWrite_timeout(_write_timeout=None):
 	try:
-		write_timeout=float(input("What write timeout (in seconds) to use (default: none)? "))
+		if _write_timeout is None:
+			write_timeout=float(input("What write timeout (in seconds) to use (default: none)? "))
+		else:
+			write_timeout=float(_write_timeout)
 		if write_timeout>0:
 			return write_timeout
 	except:
 		pass
 	print("WARNING: No or an invalid write timeout specified: no write timeout will be used.")
 	return None
-def getDsrdtr():
-	return input("Use dsr - dtr (default: False)? ") in ('Y','y')
-def getInter_byte_timeout():
+def getDsrdtr(_dsrdtr):
+	if _dsrdtr is None:
+		return input("Use dsr - dtr (default: False)? ") in ('Y','y')
+	return (False,True)[_dsrdtr in ('Y','y')]
+def getInter_byte_timeout(_inter_byte_timeout=None):
 	try:
-		inter_byte_timeout=float(input("What inter-character timeout (in seconds) to use (default: none)? "))
+		if _inter_byte_timeout is None:
+			inter_byte_timeout=float(input("What inter-character timeout (in seconds) to use (default: none)? "))
+		else:
+			inter_byte_timeout=float(_inter_byte_timeout)
 		if inter_byte_timeout>0:
 			return inter_byte_timeout
 	except:
 		pass
 	print("WARNING: No or an invalid inter-character timeout specified: no inter-character timeout will be used.")
 	return None
-def getExclusive():
-	return input("Use exclusive access mode (POSIX only) (default: False)? ") in ('Y','y')
+def getExclusive(_exclusive=None):
+	if _exclusive is None:
+		return input("Use exclusive access mode (POSIX only) (default: False)? ") in ('Y','y')
+	return (False,True)[_exclusive in ('Y','y')]
 	
+def addSerial(_serial,_report,_adddefaultbytereader):
+	if _serial is None:
+		print("No serial input device specified.")
+		return None
+	global serialDataDispatchers
+	if not _serial.port in serialDataDispatchers or not serialDataDispatchers[_serial.port].isRunning():
+		try:
+			serialDataDispatchers[_serial.port]=SerialDataDispatcher(_serial,_report,_adddefaultbytereader)
+		except Exception as ex:
+			print("ERROR: '"+str(ex)+"' instantiating the reader to read serial data from port '"+_serial.port+"'.")
+	return serialDataDispatchers[_serial.port]
+
 def getSerialDataDispatcher(inputDeviceName=None,report=True,adddefaultbytereader=False):
 	# is there a default device?
 	if not isinstance(inputDeviceName,str):
@@ -444,19 +487,43 @@ def getSerialDataDispatcher(inputDeviceName=None,report=True,adddefaultbytereade
 		else:
 			print("No serial devices available.")
 	if inputDeviceName is None:
-		print("No serial input device specified.")
 		return None
-	global serialDataDispatchers
-	if not inputDeviceName in serialDataDispatchers or not serialDataDispatchers[inputDeviceName].isRunning():
-		try:
-			serialDataDispatchers[inputDeviceName]=SerialDataDispatcher(serial.Serial(port=inputDeviceName,baudrate=getBaudrate(),bytesize=getBytesize(),parity=getParity(),stopbits=getStopbits(),timeout=getTimeout(),xonxoff=getXonxoff(),rtscts=getRtscts(),write_timeout=getWrite_timeout(),dsrdtr=getDsrdtr(),inter_byte_timeout=getInter_byte_timeout(),exclusive=getExclusive()),report,adddefaultbytereader)
-		except Exception as ex:
-			print("ERROR: '"+str(ex)+"' instantiating the reader to read serial data from port '"+inputDeviceName+"'.")
-	return serialDataDispatchers[inputDeviceName]
+	return addSerial(serial.Serial(port=_inputDeviceName,baudrate=getBaudrate(),bytesize=getBytesize(),parity=getParity(),stopbits=getStopbits(),timeout=getTimeout(),xonxoff=getXonxoff(),rtscts=getRtscts(),write_timeout=getWrite_timeout(),dsrdtr=getDsrdtr(),inter_byte_timeout=getInter_byte_timeout(),exclusive=getExclusive()),report,adddefaultbytereader)
 
-if __name__=='__main__':
-	print("Call serialdata.new() to obtain a serial data dispatcher instance.")
-elif not sys.flags.interactive:
+# if ran from the command line expecting all required parameters as command line arguments
+def main(args):
+	if len(args):
+		inputDeviceName=args[0]
+		if len(inputDeviceName)>0:
+			map={'baudrate':'','bytesize':'','parity':'','stopbits':'','timeout':'','xonxoff':'','rtscts':'','write_timeout':'','dsrdtr':'','inter_byte_timeout':'','exclusive':''}
+			for argIndex in range(1,len(args)):
+				try:
+					equalPos=args[argIndex].index('=')
+					map[args[argIndex][:equalPos]]=args[argIndex][equalPos+1:]
+				except:
+					pass
+			serialDataDispatcher=addSerial(serial.Serial(port=inputDeviceName,baudrate=getBaudrate(map['baudrate']),bytesize=getBytesize(map['bytesize']),parity=getParity(map['parity']),stopbits=getStopbits(map['stopbits']),timeout=getTimeout(map['timeout']),xonxoff=getXonxoff(map['xonxoff']),rtscts=getRtscts(map['rtscts']),write_timeout=getWrite_timeout(map['write_timeout']),dsrdtr=getDsrdtr(map['dsrdtr']),inter_byte_timeout=getInter_byte_timeout(map['inter_byte_timeout']),exclusive=getExclusive(map['exclusive'])),False,True)
+			if serialDataDispatcher is not None:
+				if serialDataDispatcher.write(b'\r\n'):
+					byteReader=serialDataDispatcher.getByteReader()
+					if byteReader is not None:
+						while byteReader.readBytesQueue:
+							while not byteReader.readBytesQueue.empty():
+								print(byteReader.readBytesQueue.get_nowait())
+							time.sleep(1)
+						print("No read bytes queue to pull!")
+					else:
+						print("ERROR: No default byte reader available!")
+				else:
+					print("ERROR: Failed to write to the serial input device.")
+			else:
+				print("ERROR: Failed to create a serial data dispatcher.")
+		else:
+			print("No serial input device specified.")
+	else:
+		print("Need at least the name of the serial input device! Any parameters should be presented on the command-line in the format <name>=<value> e.g. baudrate=9600!")		
+
+def test():
 	# try to get a dispatcher that starts immediately
 	serialDataDispatcher=getSerialDataDispatcher(None,True,True)
 	if serialDataDispatcher is not None:
@@ -466,5 +533,11 @@ elif not sys.flags.interactive:
 		else:
 			print("WARNING: Serial data dispatcher to serial port '"+serialDataDispatcher.serialInputDevice.name+"'  NOT  up and running...")
 	else:
-		print("ERROR: Failed to create a serial data dispatcher. Exiting now.")
+		print("ERROR: Failed to create a serial data dispatcher.")
+
+if __name__=='__main__':
+	main(sys.argv[1:])
+else:
+	print("Call serialdata.new() to obtain a serial data dispatcher; call getByteReader() on the serial data dispatcher to obtain the default byte reader.")
+
 	
