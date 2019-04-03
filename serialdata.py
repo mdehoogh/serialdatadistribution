@@ -10,14 +10,23 @@ MDH@02APR2019:
 import _thread
 import serial
 import queue
+import sys
 
 # ByteReceiver is the parent class of all ByteReceiver
 class ByteReader:
 	# exposes a method that will return the number of bytes received so far
-	def __init__(self,_name='anonymous'):
-		self.name=_name
+	def __init__(self,_name=None,_queue=False):
+		if isinstance(_name,str):
+			self.name=_name
+		else:
+			self.name='anonymous'
 		self.serialDataDispatcher=None
 		self.numberOfReadBytes=0 # keep track of the number of bytes collected so far
+		# if in an interactive session we will queue whatever we retrieve
+		if _queue:
+			self.readBytesQueue=queue.Queue()
+		else:
+			self.readBytesQueue=None
 	def getNumberOfReadBytes(self):
 		return self.numberOfReadBytes
 	# setSerialDataDispatcher() should raise an exception if it did not manage to set the serial data dispatcher to the presented one
@@ -46,7 +55,11 @@ class ByteReader:
 		# here's a little issue in that _numberOfStoredBytes is what the serial data dispatcher has read, but this might not be the maximum that could be retrieved
 		# therefore we simply read everything (i.e. )
 		try:
-			print("Read by byte reader '"+self.name+"': '"+str(self.read())+"'.")
+			bytesRead=self.read()
+			if self.readBytesQueue:
+				self.readBytesQueue.put_nowait(bytesRead)
+			else:
+				print("Read by byte reader '"+self.name+"': '"+str(self.read())+"'.")
 		except:
 			pass
 	def getNumberOfBytesToRead(self):
@@ -86,15 +99,18 @@ class SerialDataDispatcher:
 		self.numberOfUnstoredBytes=0 # the number of bytes we failed to store somehow (perhaps retrievableBytes is full?????)
 		self.retrievableBytes=bytearray() # all bytes currently available 
 		self.byteReaders=[] # the parties interested in reading the packets...
-		self.byteReaderCount=0
 		if _queuereported: # remembers everything reported
 			self.reported=queue.Queue()
 		else:
 			self.reported=None
 		self.serialInputDevice=_serialInputDevice
 		self.name=self.serialInputDevice.name # even if we kill the reference
+		# if there's a default byte reader, it's a good idea to start immediately...
 		if _adddefaultbytereader:
-			self.addByteReader(ByteReader())
+			if self.addByteReader(ByteReader(None,sys.flags.interactive)):
+				self.start()
+			else:
+				self.__report("ERROR: Failed to add a default byte reader.")
 
 	def __del__(self):
 		# ascertain to be closed!!
@@ -283,6 +299,11 @@ class SerialDataDispatcher:
 				if result:
 					self.__report("ERROR: Failed to delete the desociated byte reader '"+str(_byteReader)+"' from the list of registered byte readers of the serial data dispatcher of '"+self.name+"'.")
 		return result
+	def getByteReader(self,_byteReaderName=None):
+		for byteReader in self.byteReaders:
+			if byteReader.name==_byteReaderName:
+				return byteReader
+		return None
 	def addByteReader(self,_byteReader):
 		# needs to be a ByteReader to start with
 		result=False
@@ -425,7 +446,7 @@ def getSerialDataDispatcher(inputDeviceName=None,report=True,adddefaultbytereade
 	if inputDeviceName is None:
 		print("No serial input device specified.")
 		return None
-	global serialCommunicators
+	global serialDataDispatchers
 	if not inputDeviceName in serialDataDispatchers or not serialDataDispatchers[inputDeviceName].isRunning():
 		try:
 			serialDataDispatchers[inputDeviceName]=SerialDataDispatcher(serial.Serial(port=inputDeviceName,baudrate=getBaudrate(),bytesize=getBytesize(),parity=getParity(),stopbits=getStopbits(),timeout=getTimeout(),xonxoff=getXonxoff(),rtscts=getRtscts(),write_timeout=getWrite_timeout(),dsrdtr=getDsrdtr(),inter_byte_timeout=getInter_byte_timeout(),exclusive=getExclusive()),report,adddefaultbytereader)
@@ -433,21 +454,17 @@ def getSerialDataDispatcher(inputDeviceName=None,report=True,adddefaultbytereade
 			print("ERROR: '"+str(ex)+"' instantiating the reader to read serial data from port '"+inputDeviceName+"'.")
 	return serialDataDispatchers[inputDeviceName]
 
-def new():
-	print("\nNew serial data dispatcher creation")
-	report=input("Do you want to store all reports (use the serial data dispatcher method printReported() to print them)? ") in ['Y','y']
-	adddefaultbytereader=input("Do you want to add a default byte reader? ") in ['Y','y']
-	return getSerialDataDispatcher(None,report,adddefaultbytereader)
-	
-if __name__=="__main__":
-	# try to get a communicator that starts immediately
-	serialDataDispatcher=new()
+if __name__=='__main__':
+	print("Call serialdata.new() to obtain a serial data dispatcher instance.")
+elif not sys.flags.interactive:
+	# try to get a dispatcher that starts immediately
+	serialDataDispatcher=getSerialDataDispatcher(None,True,True)
 	if serialDataDispatcher is not None:
-		if serialDataDispatcher.addByteReader(ByteReader()):
-			serialDataDispatcher.start()
+		serialDataDispatcher.printReported()
+		if serialDataDispatcher.isRunning():
+			print("Serial data dispatcher to serial port '"+serialDataDispatcher.serialInputDevice.name+"' up and running...")
 		else:
-			print("ERROR: Failed to add a basic serial data byte dispatcher.")
+			print("WARNING: Serial data dispatcher to serial port '"+serialDataDispatcher.serialInputDevice.name+"'  NOT  up and running...")
 	else:
 		print("ERROR: Failed to create a serial data dispatcher. Exiting now.")
-else:
-	print("Call serialdata.new() to obtain a serial data dispatcher instance.")
+	
