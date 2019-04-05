@@ -18,11 +18,11 @@ class Reporter():
 	def __init__(self):
 		self.reportIndex=0
 		self.queue=queue.Queue()
-	def reported(self,_report):
+	def _reporting(self,_report):
 		if _report is not None:
 			self.reportIndex+=1
 			self.queue.put_nowait(str(datetime.datetime.fromtimestamp(time.time()))+"\t"+str(self.reportIndex)+"\t"+str(_report))
-	def report(self):
+	def report(self,_reportcountflag=False):
 		reportCount=0
 		try:
 			# will wear itself out eventually
@@ -30,7 +30,12 @@ class Reporter():
 				print(self.queue.get_nowait())
 				reportCount+=1
 		except:
-			self.reported(str(reportCount)+" reported messages printed!")
+			pass
+		if _reportcountflag:
+			if reportCount:
+				print(str(reportCount)+" reported messages printed!")
+			else:
+				print("No messages to report!")
 
 # ByteReceiver is the parent class of all ByteReceiver
 class ByteReader(Reporter):
@@ -59,23 +64,26 @@ class ByteReader(Reporter):
 				self.numberOfWrittenBytes+=len(readBytes)
 				return readBytes
 			except Exception as ex:
-				self.report("ERROR: '"+str(ex)+"' retrieving bytes read.")
+				self._reporting("ERROR: '"+str(ex)+"' retrieving bytes read.")
 		return None
 
 	def getNumberOfReadBytes(self):
 		return self.numberOfReadBytes
-	# setSerialDataDispatcher() raises an exception if the input is invalid, otherwise it returns the current serial data dispatcher (the one that is replaced)
-	def setSerialDataDispatcher(self,_serialDataDispatcher):
+	# setSource() raises an exception if the input is invalid, otherwise it returns the current serial data dispatcher (the one that is replaced)
+	def setSource(self,_serialDataDispatcher):
 		if _serialDataDispatcher is not None and not isinstance(_serialDataDispatcher,SerialDataDispatcher):
-			raise Exception("Not a serial data dispatcher.")
-		currentSerialDataDispatcher=self.serialDataDispatcher
+			self._reporting("Source undefined or not a serial data dispatcher.")
+			return
 		self.serialDataDispatcher=_serialDataDispatcher
 		self.numberOfBytesRead=0 # this is essential because NO bytes have been read so far from the given serial data dispatcher, of course it could be the same dispatcher so this is like a reset!!!
-		return currentSerialDataDispatcher
+		if self.serialDataDispatcher:
+			self._reporting("Source '"+self.serialDataDispatcher.name+"' attached!")
+		else:
+			self._reporting("Source detached!")
 	def getSource(self):
 		return self.serialDataDispatcher
 	# call __read() with the number of bytes to read which is at most self.numberOfUnretrievedBytes
-	def __read(self,_numberOfBytesToRead=0):
+	def _read(self,_numberOfBytesToRead=0):
 		if not isinstance(_numberOfBytesToRead,int) or _numberOfBytesToRead<0:
 			raise Exception("Number of bytes to read invalid.")
 		if not self.serialDataDispatcher:
@@ -85,7 +93,7 @@ class ByteReader(Reporter):
 			self.numberOfReadBytes+=len(readBytes)
 			return readBytes
 		except Exception as ex:
-			self.report("ERROR: '"+str(ex)+"' reading bytes.")
+			self._reporting("ERROR: '"+str(ex)+"' reading bytes.")
 		return None
 	# update() is called by self.serialDataDispatcher when new bytes were stored, you should override it in a subclass to prevent printing
 	def update(self,_numberOfStoredBytes):
@@ -93,11 +101,11 @@ class ByteReader(Reporter):
 		# therefore we simply read everything (i.e. )
 		self.updateCount+=1
 		try:
-			bytesRead=self.__read()
+			bytesRead=self._read()
 			if bytesRead:
 				self.readBytesQueue.put_nowait(bytesRead)
 		except Exception as ex:
-			self.report("ERROR: '"+str(ex)+"' updating.")
+			self._reporting("ERROR: '"+str(ex)+"' updating.")
 	def getNumberOfBytesToRead(self):
 		return self.serialDataDispatcher.getNumberOfStoredBytes()-self.numberOfReadBytes
 	def write(self,_bytes): # service
@@ -141,7 +149,7 @@ class LineByteReader(ByteReader):
 			self.readBytesQueue.put_nowait(self.line)
 			self.line=bytearray()
 		except Exception as ex:
-			self.report("ERROR: '"+str(ex)+"' registering a line.")
+			self._reporting("ERROR: '"+str(ex)+"' registering a line.")
 			# just append the current line separator bytes to the current line
 			for linesepbyte in self.linesep:
 				self.line.append(self.linesepbyte)
@@ -150,7 +158,7 @@ class LineByteReader(ByteReader):
 	def update(self,_numberOfStoredBytes):
 		self.updateCount+=1
 		try:
-			bytesRead=self.__read()
+			bytesRead=self._read()
 			for byte in bytesRead:
 				if byte in self.sepbytes: # a line separator byte
 					self.linesep.append(byte)
@@ -161,7 +169,7 @@ class LineByteReader(ByteReader):
 						self.__registerLine()
 					self.line.append(byte)
 		except Exception as ex:
-			self.report("ERROR: '"+str(ex)+"' extracting lines when asked to update.")
+			self._reporting("ERROR: '"+str(ex)+"' extracting lines when asked to update.")
 
 # SerialDataDispatcher keeps as many bytes as it needs
 # we might make it keep a queue of reports
@@ -170,7 +178,7 @@ class SerialDataDispatcher(Reporter):
 	# writes to the associated Reporter (defaults to itself)
 	def __report(self,_report):
 		try:
-			self.reporter.reported(_report)
+			self.reporter._reporting(_report)
 		except:
 			pass
 
@@ -218,7 +226,7 @@ class SerialDataDispatcher(Reporter):
 			# after storing all byte we're reading to inform the byte retrievers
 			if stored:
 				for byteReader in self.byteReaders.values():
-					if byteReader.getSerialDataDispatcher()==self:
+					if byteReader.getSource()==self:
 						try:
 							byteReader.update(stored)
 						except Exception as ex:
@@ -327,13 +335,13 @@ class SerialDataDispatcher(Reporter):
 		if not isinstance(_byteReader,ByteReader):
 			raise Exception("No byte reader defined.")
 		if isinstance(_numberOfBytesToRead,int) and _numberOfBytesToRead>=0:
-			if _byteReader.getSerialDataDispatcher()==self:
+			if _byteReader.getSource()==self:
 				# the index of the first retrievable bytes equals the number of retrieved bytes minus the number of disposed bytes
 				firstByteToRead=_byteReader.getNumberOfReadBytes()-self.getNumberOfDisposedBytes()
 				if _numberOfBytesToRead:
 					return (firstByteToRead,self.retrievableBytes[firstByteToRead:firstByteToRead+_numberOfBytesToRead])
 				return (firstByteToRead,self.retrievableBytes[firstByteToRead:])
-			self.report("Requesting byte reader '"+str(_byteReader)+"' not associated with the serial data dispatcher of '"+self.name+"'.")
+			self._reporting("Requesting byte reader '"+str(_byteReader)+"' not associated with the serial data dispatcher of '"+self.name+"'.")
 		return None
 
 	def isRunning(self):
@@ -416,7 +424,7 @@ class SerialDataDispatcher(Reporter):
 			raise Exception("Undefined or invalid byte reader name!")
 		if _byteReaderName in self.byteReaders:
 			try:
-				self.byteReaders[_byteReaderName].setSerialDataDispatcher(None)
+				self.byteReaders[_byteReaderName].setSource(None)
 				del self.byteReaders[_byteReaderName] # might fail if it wasn't present to start with
 				self.__report("Byte reader with name '"+_byteReaderName+"' removed!")
 			except:
@@ -435,9 +443,9 @@ class SerialDataDispatcher(Reporter):
 		if not _byteReaderName in self.byteReaders: # not currently registered (under that name)
 			try:
 				self.byteReaders[_byteReaderName]=_byteReader
-				_byteReader.setSerialDataDispatcher(self) # won't raise an exception because the input is not invalid
+				_byteReader.setSource(self) # won't raise an exception because the input is not invalid
 				result=True
-			except:
+			except Exception as ex:
 				self.__report("ERROR: '"+str(ex)+"' in adding byte reader '"+_byteReaderName+"' to the list of byte readers of the serial data dispatcher of '"+self.name+"'.")
 		elif self.byteReaders[_byteReaderName]==_byteReader: # already have it!!!
 			result=True
@@ -587,7 +595,7 @@ def addSerial(_serial):
 	if _serial.port in serialDataDispatchers:
 		return serialDataDispatchers[_serial.port]
 	return None
-def getSerialDataDispatcher(inputDeviceName=None,report=True):
+def getSerialDataDispatcher(inputDeviceName=None):
 	# is there a default device?
 	if not isinstance(inputDeviceName,str):
 		inputDeviceName=None

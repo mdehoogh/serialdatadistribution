@@ -1,7 +1,33 @@
-MDH@29MAR2019: start
+MDH@05APR2019:
 
-Use:
+Example serialdata module usage (to be entered one line at a time in Python3 interactive mode):
 
+import serialdata
+
+# make a line byte reader
+r=serialdata.new().addByteReader(serialdata.LineByteReader())
+
+# keep popping
+import time
+for i in iter(r):
+	if i is None:
+		r.report()
+	else:
+		print(str(i))
+	time.sleep(0.01) # hope to keep up
+
+# abort using Ctrl-C
+# stop the 'source'
+r.getSource().stop()
+
+# stop the reader
+r.stop()
+
+# done
+
+MDH@29MAR2019:
+
+Example serialdatadistribution usage:
 
 import serialdatadistribution
 
