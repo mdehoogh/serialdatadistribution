@@ -1,3 +1,27 @@
+MDH@08APR2019:
+
+Example serialdata2 module usage:
+
+import serialdata2
+
+l=serialdata2.LineByteProcessor()
+
+s=serialdata2.new().setByteProcessor(l).start()
+
+# call l.report() repeatedly to view the extracted lines
+
+# call s.stop() to stop the SerialByteSource, or s.pause() and s.resume() to pause/resume the SerialByteSource
+s.stop()
+
+General usage:
+serialdata2.new() helps you create a SerialByteSource instance that descends from ByteSource.
+ByteSource is a class that wraps the bytes received in a BytesRead instance (which is timestamped).
+ByteSource and ByteProcessor instances allow setting a (next) ByteProcessor in the constructor.
+ByteSource and ByteProcessor immediately push their received BytesRead instance to the next ByteProcessor by calling the processed() method of the next ByteProcessor.
+ByteDispatcher descends ByteProcessor as well but keeps all the BytesRead instances it receives in a queue, that registered BytesSink instances can request (pull).
+ByteSink descends ByteProcessor as well but have a getNumberOfBytesRead() method for ByteDispatcher() to call to determine how many BytesRead were processed so far.
+ByteDispatchers removes all BytesRead instances no longer required by all its ByteSink instances.
+
 MDH@05APR2019:
 
 Example serialdata module usage (to be entered one line at a time in Python3 interactive mode):
