@@ -15,6 +15,9 @@ import queue
 import sys
 import time
 import datetime
+import socket
+
+__DEBUG__=False
 
 # a ByteSource wraps bytes in BytesRead which remembers when it was created (in self.time)
 class BytesRead(bytearray):
@@ -47,13 +50,16 @@ class BytesRead(bytearray):
 		return self.__str__()
 
 class Reporter:
-	def __init__(self):
+	def __init__(self,echo=False):
+		self.__echo=echo
 		self.__reportIndex=0
 		self.__reportQueue=queue.Queue()
 	def _reporting(self,report):
 		if report is not None:
 			self.__reportIndex+=1
 			self.__reportQueue.put_nowait(str(datetime.datetime.fromtimestamp(time.time()))+"\t"+str(self.__reportIndex)+"\t"+str(report))
+			if self.__echo:
+				print(str(report))
 	def report(self,reportcountflag=False):
 		reportCount=0
 		try:
@@ -72,70 +78,87 @@ class Reporter:
 		return self.__reportQueue.qsize()
 	def reported(self):
 		return self.__reportIndex
-
-# ByteProcessor processes BytesRead instances, pushing the result along
-class ByteProcessor(Reporter):
-	def __init__(self,nextByteProcessor):
-		super().__init__()
-		self._nextByteProcessor=(None,nextByteProcessor)[isinstance(nextByteProcessor,ByteProcessor)]
-		self._processedBytesRead=None
-	# two protected methods take care of processing and passing along what was processed!!
-	# call _passAlong() with whatever needs to be passed along to __nextByteProcessor
-	def _pushedAlong(self,bytesRead):
-		return self._nextByteProcessor is None or self._nextByteProcessor.processed(bytesRead)
-	# my _processed() does nothing more than copy what was read, or append it
-	# any subclass should implement _processedBytesRead itself to pass it along
-	def _processed(self,bytesRead):
-		if self._nextByteProcessor:
-			if self._processedBytesRead:
-				self._processedBytesRead.appendBytes(bytesRead.getBytes())
-			else: # make a copy
-				self._processedBytesRead=bytesRead.copy()
-			if self._pushedAlong(self._processedBytesRead):
-				self._processedBytesRead=None
-		# assume to be successful if self._processedBytesRead is now None!!
-		return self._processedBytesRead is None
-	def processed(self,bytesRead):
-		result=False
-		if isinstance(bytesRead,BytesRead): # valid input
-			try:
-				if self._processed(bytesRead):
-					result=True
-			except Exception as ex:
-				super().reporting("ERROR: '"+str(ex)+"' in processing '"+str(bytesRead)+"'.")
-		return result
 	def __repr__(self):
 		return "Reported: "+str(self.reported())+" - reportable: "+str(self.toreport());
 
-# LineByteProcessor cuts out the line separators
-class LineByteProcessor(ByteProcessor):
-	def __init__(self,nextByteProcessor=None,sepbytes=b'\r\n',maxsepcount=2):
-		super().__init__(nextByteProcessor)
+# a ByteConsumer implements consumed() to process a BytesRead instance, passed to it by a ByteProducer
+class ByteConsumer(Reporter):
+	def __init__(self,echo=False):
+		super().__init__(echo)
+		# as a service keep track of how many BytesRead were consumed and the last BytesRead consumed..
+		self.__consumedIndex=0
+		self.__consumed=None
+	def consumed(self,bytesRead):
+		if isinstance(bytesRead,BytesRead):
+			try:
+				self.__consumed=bytesRead
+				self.__consumedIndex+=1
+				return True
+			except:
+				super()._reporting("ERROR: '"+str(ex)+"' consuming '"+str(bytesRead)+"'.")
+		return False
+	def __repr__(self):
+		result=super().__repr__()
+		if self.__consumed:
+			result+=" - #"+str(self.__consumedIndex)+": '"+str(self.__consumed)
+		return result
+
+class UDPByteConsumer(ByteConsumer):
+	def __init__(self,destinationPort,destinationIPAddress='127.0.0.1'):
+		super().__init__(__DEBUG__) # let's echo when debugging
+		self.__destination=(destinationIPAddress,destinationPort)
+		self.__udpSocket=socket.socket(socket.AF_INET,socket.SOCK_DGRAM) # UDP socket
+	def consumed(self,bytesRead):
+		if super().consumed(bytesRead):
+			try:
+				bytesReadText=str(bytesRead)
+				# we're NOT sending the timestamp along!!!!
+				bytesReadbytes=bytesRead.getBytes()
+				"""
+				bytesReadbytes=bytes(bytesReadText,'ascii') # convert to a bytes object to send along...
+				"""
+				bytesSent=self.__udpSocket.sendto(bytesReadbytes,self.__destination)
+				if bytesSent==len(bytesReadbytes): # all bytes sent
+					return True
+				super()._reporting("ERROR: Only "+str(bytesSent)+" out of "+str(len(bytesReadbytes))+" bytes sent to "+str(self.__destination)+".")
+			except Exception as ex:
+				super()._reporting("ERROR: '"+str(ex)+"' in sending '"+bytesReadText+"'' to "+str(self.__destination)+".")
+		else:
+			super()._reporting("ERROR: No or invalid BytesRead to consume!")
+		#####print("ERROR: Consuming '"+str(bytesRead)+"' failed.")
+		return False
+
+# a ByteProducer knows it byte consumer to push along what it receives
+# LineByteConsumer cuts out the line ends but does not send what it receives along
+class LineByteConsumer(ByteConsumer):
+
+	def __init__(self,sepbytes=b'\r\n',maxsepcount=2):
+		super().__init__()
 		if not isinstance(sepbytes,bytes) or len(sepbytes)==0:
 			raise Exception("Invalid line separators.")
 		self.__sepbytes=sepbytes
 		self.__maxsepcount=maxsepcount
 		self.__line=None
 		self.__linesep=None
-	
-	def _pushedAlong(self,bytesRead):
-		if self._nextByteProcessor:
-			return super()._pushedAlong(bytesRead)
+
+	# _pushed() is actually a ByteProducer method
+	def _pushed(self,bytesRead):
 		# I suppose without a next byte processor we can simply print it, or even better report it
 		self._reporting("Line '"+str(bytesRead)+"'.");
-		return True
-	
-	def __pushLineAlong(self):
+		return True	# my implementation of _processed calls _passedAlong for any line
+
+	def __pushLine(self):
 		if self.__line: # something to push along
-			if not self._pushedAlong(self.__line): # failed to push along what we have to push along
+			if not self._pushed(self.__line): # failed to push along what we have to push along
 				self.__line.appendBytes(self.__linesep)
 				self.__linesep=bytearray()
 			else:
 				self.__line=None
-	# my implementation of _processed calls _passedAlong for any line 
+
 	def __newline(self,time):
 		self.__line=BytesRead(time_=time) # using the time passed in to initialize the BytesRead with
 		self.__linesep=bytearray() # keep track of the current separator
+
 	def _processed(self,bytesRead):
 		#####print("Processing '"+str(bytesRead)+"'...")
 		result=False
@@ -147,10 +170,10 @@ class LineByteProcessor(ByteProcessor):
 				if byteRead in self.__sepbytes: # a line separator byte
 					self.__linesep.append(byteRead)
 					if self.__maxsepcount>0 and len(self.__linesep)>=self.__maxsepcount: # end of line
-						self.__pushLineAlong()
+						self.__pushLine()
 				else: # not a line separator byte
 					if len(self.__linesep): # we're in a line separator, the received byte starts a new line
-						self.__pushLineAlong()
+						self.__pushLine()
 					# we need a BytesRead instance in self.__line to append our byte to
 					if not self.__line:
 						self.__newline(bytesRead.getTime())
@@ -158,27 +181,77 @@ class LineByteProcessor(ByteProcessor):
 			result=True
 		except Exception as ex:
 			self._reporting("ERROR: '"+str(ex)+"' extracting lines from "+str(bytesRead)+".")
-		return True
+		return result
 
+	def consumed(self,producedBytesRead):
+		return super().consumed(producedBytesRead)and self._processed(producedBytesRead)
+
+class ByteProducer(Reporter):
+	def setByteConsumer(self,byteConsumer):
+		if __DEBUG__:
+			if byteConsumer:
+				print("Setting the byte consumer to '"+str(byteConsumer)+"!")
+			else:
+				print("No byte consumer to set!")
+		self._byteConsumer=(None,byteConsumer)[isinstance(byteConsumer,ByteConsumer)]
+		if __DEBUG__:
+			if self._byteConsumer:
+				print("Byte consumer set to '"+str(self._byteConsumer)+"!")
+			else:
+				print("No byte consumer set!")
+		return self
+	def __init__(self,byteConsumer=None):
+		super().__init__()
+		self.setByteConsumer(byteConsumer)
+	def getByteConsumer(self):
+		return self._byteConsumer
+	# call _pushed() to push along what was produced
+	def _pushed(self,producedBytesRead):
+		return self._byteConsumer is None or self._byteConsumer.consumed(producedBytesRead)
+
+# a ByteProcessor is both a ByteProducer and a ByteConsumer
+class ByteProcessor(ByteProducer,ByteConsumer):
+	def __init__(self,nextByteConsumer):
+		ByteProducer.__init__(self,nextByteConsumer)
+		ByteConsumer.__init__(self)
+		self._processedBytesRead=None # holds on to the processed bytes read until they are consumed
+	def _processed(self,bytesRead):
+		if self._byteConsumer:
+			if self._processedBytesRead:
+				self._processedBytesRead.appendBytes(bytesRead.getBytes())
+			else: # make a copy
+				self._processedBytesRead=bytesRead.copy()
+			if self._pushed(self._processedBytesRead):
+				self._processedBytesRead=None
+		# assume to be successful if self._processedBytesRead is now None!!
+		return self._processedBytesRead is None
+	# consumed() is overridden to send along what was received
+	def consumed(self,bytesRead):
+		result=False
+		if super().consumed(bytesRead): # valid (and registered) input
+			try:
+				if self._processed(bytesRead):
+					result=True
+			except Exception as ex:
+				super()._reporting("ERROR: '"+str(ex)+"' in processing '"+str(bytesRead)+"'.")
+		return result
+
+class LineByteProcessor(LineByteConsumer,ByteProducer):
+	def __init__(self,nextByteProcessor=None,sepbytes=b'\r\n',maxsepcount=2):
+		LineByteConsumer.__init__(self,sepbytes,maxsepcount)
+		ByteProducer.__init__(self,nextByteProcessor)
+	
+	def _pushed(self,bytesRead):
+		if self._byteConsumer:
+			return self._byteConsumer.consumed(bytesRead)
+		print("No byte consumer to push to!")
+		return super()._pushed(bytesRead)
 
 # ByteSource receives the raw bytes in its _register method and is the first element in the chain of byte processors, so immediately pushes it along to the associated byte processor
-class ByteSource(Reporter):
-
-	def setByteProcessor(self,byteProcessor):
+class ByteSource(ByteProducer):
+	def __init__(self,byteConsumer):
+		super().__init__(byteConsumer)
 		self.__bytesRead=None
-		if isinstance(byteProcessor,ByteProcessor):
-			self.__byteProcessor=byteProcessor
-		else:
-			self.__byteProcessor=None
-		return self
-
-	def __init__(self,byteProcessor):
-		super().__init__()
-		self.setByteProcessor(byteProcessor)
-
-	def getByteProcessor(self):
-		return self.__byteProcessor
-
 	def _registered(self,bytes):
 		# the issue here is that we do not want to loose any bytes received...
 		result=False
@@ -187,7 +260,8 @@ class ByteSource(Reporter):
 				self.__bytesRead=BytesRead(bytes)
 			else:
 				self.__bytesRead.appendBytes(bytes)
-			if not self.__byteProcessor or self.__byteProcessor.processed(self.__bytesRead):
+			# if we manage to push the constructed __bytesRead along, we can get rid of self.__bytesRead
+			if self._pushed(self.__bytesRead):
 				self.__bytesRead=None
 		except Exception as ex:
 			self._reporting("ERROR: '"+str(ex)+"' in registering '"+str(bytes)+"' by byte source '"+str(self)+"'.")
@@ -370,7 +444,7 @@ class SerialByteSource(ByteSource):
 						if self._registered(self.__serialInputDevice.read(size=numberOfBytesToRead)):
 							self.__numberOfBytesRead+=numberOfBytesToRead
 						else:
-							self._reporting("ERROR: Failed to register "+str(numberOfBytesRead)+" serial bytes read.")
+							self._reporting("ERROR: Failed to register "+str(numberOfBytesToRead)+" serial bytes read.")
 					if _sleep>0:
 						time.sleep(_sleep)
 				else:
@@ -440,13 +514,13 @@ class SerialByteSource(ByteSource):
 
 	def stop(self):
 		if self.__serialInputDevice is None:
-			self._reporting("Can't stop '"+self.name+"' again.")
+			self._reporting("Can't stop '"+self.__name+"' again.")
 			return False
 		if not self.__running:
 			# force a close if the serial input device is still open (as it would be if we didn't start at all!!)
 			if self.__serialInputDevice.isOpen:
 				self.__close()
-			self._reporting("Can't stop '"+self.name+"' it has already stopped.")
+			self._reporting("Can't stop '"+self.__name+"' it has already stopped.")
 		else:
 			self.__running=False
 		return not self.__running
@@ -455,13 +529,13 @@ class SerialByteSource(ByteSource):
 		if self.__running:
 			self.__paused=True
 		else:
-			self._reporting("Can't pause '"+self.name+"': not currently running!")
+			self._reporting("Can't pause '"+self.__name+"': not currently running!")
 		return self.__paused
 	def resume(self):
 		if self.__running:
 			self.__paused=False
 		else:
-			self._reporting("Can't resume '"+self.name+"': not currently running!")
+			self._reporting("Can't resume '"+self.__name+"': not currently running!")
 		return not self.__paused
 
 # keep a dictionary of serial data dispatchers (by serial port name)

@@ -2,15 +2,28 @@ MDH@08APR2019:
 
 Example serialdata2 module usage:
 
-import serialdata2
+import serialdata2 as sd2
 
-l=serialdata2.LineByteProcessor()
+# create a SerialByteSource calling new(), set its byte consumer to extract lines and start the serial byte source
+s=sd2.new().setByteConsumer(sd2.LineByteConsumer()).start()
 
-s=serialdata2.new().setByteProcessor(l).start()
+# alternative: use LineByteProcessor instead of LineByteConsumer e.g. passing in an UDPByteConsumer(<local destination port>) as argument
+s.setByteConsumer(UDPByteConsumer(2222))
+
+# extract the byte consumer
+l=s.getByteConsumer()
+
+# execute l to see the last line produced
+l
 
 # call l.report() repeatedly to view the extracted lines
+l.report()
 
-# call s.stop() to stop the SerialByteSource, or s.pause() and s.resume() to pause/resume the SerialByteSource
+# pause/resume reading from the serial port
+s.pause()
+s.resume()
+
+# stop using the serial port
 s.stop()
 
 General usage:
